@@ -1,0 +1,285 @@
+function sendSMS() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var lastRow = sheet.getLastRow();
+  var API_KEY = "YOUR_API_KEY";      // Your MRAM API Key
+  var SENDER_ID = "YOUR_SENDER_ID";  // Your approved Sender ID
+  
+  for (var i = 2; i <= lastRow; i++) {
+    var phone = sheet.getRange(i, 1).getValue().toString().trim();
+    var message = sheet.getRange(i, 2).getValue().toString().trim();
+    var sendIdCell = sheet.getRange(i, 3); // Column C: SMS Shoot ID
+    
+    if (phone && message && !sendIdCell.getValue()) {
+      sendSingleSMS(i, phone, message, API_KEY, SENDER_ID);
+    }
+  }
+}
+
+function sendSingleSMS(rowNumber, phone, message, apiKey, senderId) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var sendIdCell = sheet.getRange(rowNumber, 3); // Column C: SMS Shoot ID
+  var statusCell = sheet.getRange(rowNumber, 5); // Column E: Status
+  
+  // If no parameters provided, get them from the sheet and config
+  if (!phone || !message) {
+    phone = sheet.getRange(rowNumber, 1).getValue().toString().trim();
+    message = sheet.getRange(rowNumber, 2).getValue().toString().trim();
+  }
+  if (!apiKey) apiKey = "YOUR_API_KEY";
+  if (!senderId) senderId = "YOUR_SENDER_ID";
+  
+  // Allow resending if previously failed (check button status)
+  var currentButtonStatus = statusCell.getValue().toString();
+  var canSend = !sendIdCell.getValue() || currentButtonStatus.includes("❌ Failed");
+  
+  if (phone && message && canSend) {
+    // Clear previous failed attempt
+    if (currentButtonStatus.includes("❌ Failed")) {
+      sendIdCell.setValue("");
+    }
+    
+    var url = "https://sms.mram.com.bd/smsapi?api_key=" + encodeURIComponent(apiKey)
+            + "&type=text"
+            + "&contacts=" + encodeURIComponent(phone)
+            + "&senderid=" + encodeURIComponent(senderId)
+            + "&msg=" + encodeURIComponent(message);
+    
+    try {
+      var response = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+      var responseText = response.getContentText().trim();
+      
+      // Extract SMS ID from response like "SMS SUBMITTED: ID - bw-rdC3000708689add11452c1"
+      var smsId = extractSMSId(responseText);
+      
+      // Check if we got a valid SMS ID (not an error message)
+      var isValidSmsId = isValidSMSId(smsId, responseText);
+      
+      if (isValidSmsId) {
+        sendIdCell.setValue(smsId);
+        updateButtonStatus(rowNumber, true);
+      } else {
+        // Don't save failed response to SMS ID cell, keep it empty for retry
+        sendIdCell.setValue("");
+        updateButtonStatus(rowNumber, false);
+      }
+      
+    } catch (e) {
+      // Don't save error to SMS ID cell, keep it empty for retry
+      sendIdCell.setValue("");
+      updateButtonStatus(rowNumber, false);
+    }
+  }
+}
+
+function extractSMSId(responseText) {
+  // Extract SMS ID from responses like "SMS SUBMITTED: ID - bw-rdC3000708689add11452c1"
+  var match = responseText.match(/ID\s*-\s*([a-zA-Z0-9\-_]+)/);
+  if (match && match[1]) {
+    return match[1];
+  }
+  
+  // If pattern doesn't match, return the original response
+  return responseText;
+}
+
+function isValidSMSId(smsId, originalResponse) {
+  // Check if the SMS ID is valid (not an error message)
+  // Valid SMS ID typically contains alphanumeric characters with hyphens
+  var validIdPattern = /^[a-zA-Z0-9\-_]{10,}$/; // At least 10 characters
+  
+  // Check if it's a valid SMS ID format
+  if (validIdPattern.test(smsId)) {
+    return true;
+  }
+  
+  // Check if original response contains success indicators
+  if (originalResponse.toLowerCase().includes('submitted') || 
+      originalResponse.toLowerCase().includes('success')) {
+    return true;
+  }
+  
+  // Check if it's an error message
+  if (originalResponse.toLowerCase().includes('error') || 
+      originalResponse.toLowerCase().includes('failed') || 
+      originalResponse.toLowerCase().includes('invalid') ||
+      originalResponse.toLowerCase().includes('insufficient')) {
+    return false;
+  }
+  
+  // If unsure, return false for safety
+  return false;
+}
+
+function updateButtonStatus(rowNumber, success) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var statusCell = sheet.getRange(rowNumber, 5); // Column E - Status
+  var buttonCell = sheet.getRange(rowNumber, 6); // Column F - Button
+  
+  if (success) {
+    statusCell.setValue("✅ Sent");
+    statusCell.setBackground("#d4edda"); // Light green background
+    
+    buttonCell.setValue("✅ SENT");
+    buttonCell.setBackground("#28a745"); // Green background
+    buttonCell.setFontColor("#ffffff"); // White text
+  } else {
+    statusCell.setValue("❌ Failed");
+    statusCell.setBackground("#f8d7da"); // Light red background
+    
+    buttonCell.setValue("🔄 RETRY");
+    buttonCell.setBackground("#dc3545"); // Red background
+    buttonCell.setFontColor("#ffffff"); // White text
+  }
+}
+
+function checkDLR() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var lastRow = sheet.getLastRow();
+  var API_KEY = "YOUR_API_KEY";  // Your MRAM API Key
+  
+  for (var i = 2; i <= lastRow; i++) {
+    var sendId = sheet.getRange(i, 3).getValue().toString().trim(); // Column C
+    var statusCell = sheet.getRange(i, 4); // Column D: Delivery Status
+    
+    if (sendId && !statusCell.getValue()) {
+      var url = "https://sms.mram.com.bd/miscapi/" + encodeURIComponent(API_KEY)
+              + "/getDLRRep/" + encodeURIComponent(sendId);
+      
+      try {
+        var response = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+        statusCell.setValue(response.getContentText().trim());
+      } catch (e) {
+        statusCell.setValue("Error: " + e.toString());
+      }
+    }
+  }
+}
+
+function checkBalance() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var API_KEY = "YOUR_API_KEY";  // Your MRAM API Key
+  var balanceCell = sheet.getRange("F1");  // Adjust as needed
+  var url = "https://sms.mram.com.bd/miscapi/" + encodeURIComponent(API_KEY) + "/getBalance";
+  
+  try {
+    var response = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+    balanceCell.setValue("Balance: " + response.getContentText().trim());
+  } catch (e) {
+    balanceCell.setValue("Error: " + e.toString());
+  }
+}
+
+function setupButtons() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var lastRow = sheet.getLastRow();
+  
+  // Set up headers
+  sheet.getRange("A1").setValue("Phone Number");
+  sheet.getRange("B1").setValue("Message");
+  sheet.getRange("C1").setValue("SMS ID");
+  sheet.getRange("D1").setValue("Delivery Status");
+  sheet.getRange("E1").setValue("Status");
+  sheet.getRange("F1").setValue("Send SMS");
+  
+  // Create buttons for each row with data
+  for (var i = 2; i <= lastRow; i++) {
+    var phone = sheet.getRange(i, 1).getValue();
+    var message = sheet.getRange(i, 2).getValue();
+    
+    if (phone && message) {
+      createSendButton(i);
+    }
+  }
+}
+
+function createSendButton(rowNumber) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var buttonCell = sheet.getRange(rowNumber, 6); // Column F
+  var statusCell = sheet.getRange(rowNumber, 5); // Column E for status
+  
+  // Create button text in Column F
+  buttonCell.setValue("📤 SEND");
+  buttonCell.setBackground("#4285f4"); // Blue background
+  buttonCell.setFontColor("#ffffff"); // White text
+  buttonCell.setHorizontalAlignment("center");
+  buttonCell.setVerticalAlignment("middle");
+  buttonCell.setFontWeight("bold");
+  buttonCell.setBorder(true, true, true, true, null, null, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // Initialize status in Column E
+  statusCell.setValue("⏳ Ready");
+  statusCell.setBackground("#f8f9fa"); // Light gray background
+  statusCell.setHorizontalAlignment("center");
+}
+
+function onSelectionChange(e) {
+  // This function is triggered when user clicks on a cell
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var range = e.range;
+  
+  // Check if clicked cell is in column F (Send SMS column) and not header row
+  if (range.getColumn() == 6 && range.getRow() > 1) {
+    var rowNumber = range.getRow();
+    var phone = sheet.getRange(rowNumber, 1).getValue().toString().trim();
+    var message = sheet.getRange(rowNumber, 2).getValue().toString().trim();
+    
+    if (phone && message) {
+      sendSingleSMSFromButton(rowNumber);
+    } else {
+      SpreadsheetApp.getUi().alert('Please fill phone number and message for row ' + rowNumber);
+    }
+  }
+}
+
+function sendSingleSMSFromButton(rowNumber) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var phone = sheet.getRange(rowNumber, 1).getValue().toString().trim();
+  var message = sheet.getRange(rowNumber, 2).getValue().toString().trim();
+  
+  // Update button to show processing
+  var buttonCell = sheet.getRange(rowNumber, 6);
+  var statusCell = sheet.getRange(rowNumber, 5);
+  
+  buttonCell.setValue("⏳ SENDING...");
+  buttonCell.setBackground("#ff9800"); // Orange background
+  statusCell.setValue("📤 Sending...");
+  statusCell.setBackground("#fff3cd"); // Yellow background
+  
+  // Send SMS
+  sendSingleSMS(rowNumber, phone, message, "YOUR_API_KEY", "YOUR_SENDER_ID");
+}
+
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  
+  ui.createMenu('📩 SMS Menu')
+    .addItem('Send All SMS', 'sendSMS')
+    .addItem('Check Delivery Status', 'checkDLR')
+    .addItem('Check Balance', 'checkBalance')
+    .addSeparator()
+    .addItem('Setup Buttons', 'setupButtons')
+    .addItem('Send SMS for Selected Row', 'sendSMSForSelectedRow')
+    .addToUi();
+}
+
+function sendSMSForSelectedRow() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var activeRange = sheet.getActiveRange();
+  var rowNumber = activeRange.getRow();
+  
+  if (rowNumber < 2) {
+    SpreadsheetApp.getUi().alert('Please select a data row (row 2 or below)');
+    return;
+  }
+  
+  var phone = sheet.getRange(rowNumber, 1).getValue().toString().trim();
+  var message = sheet.getRange(rowNumber, 2).getValue().toString().trim();
+  
+  if (!phone || !message) {
+    SpreadsheetApp.getUi().alert('Please ensure phone number and message are filled for the selected row');
+    return;
+  }
+  
+  sendSingleSMS(rowNumber, phone, message, "YOUR_API_KEY", "YOUR_SENDER_ID");
+  SpreadsheetApp.getUi().alert('SMS sent for row ' + rowNumber);
+}
